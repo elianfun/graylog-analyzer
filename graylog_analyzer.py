@@ -286,7 +286,7 @@ def run_fetch_hour(config: dict):
         if not fname.endswith(".json"):
             continue
         try:
-            file_dt = datetime.strptime(fname[:13], "%Y-%m-%d_%H")
+            file_dt = datetime.strptime(fname[:13], "%Y-%m-%d_%H").replace(tzinfo=timezone.utc)
             if file_dt < cutoff:
                 os.remove(os.path.join(cache_dir, fname))
                 removed += 1
