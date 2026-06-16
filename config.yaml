@@ -1,0 +1,21 @@
+graylog:
+  url: http://192.168.222.77:9000
+
+ollama:
+  url: http://192.168.223.168:11434
+  model: qwen3.5:4b
+
+query:
+  range_seconds: 86400   # 預設查過去 24 小時
+  limit: 1000            # 每次最多撈幾筆（hourly 模式用此值）
+  keywords:
+    - "level:0 OR level:1 OR level:2 OR level:3"
+    - "message:error OR message:fail OR message:down OR message:critical"
+
+output:
+  default: terminal      # terminal / file / email / line
+  report_dir: ./reports
+
+schedule:
+  enabled: false         # 是否啟用定時排程
+  cron: "0 8 * * *"     # 每天早上 8 點

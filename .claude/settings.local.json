@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__graylog__test_connection",
+      "mcp__graylog__search_logs",
+      "PowerShell(Test-NetConnection -ComputerName 192.168.223.168 -Port 11434 -InformationLevel Quiet 2>&1)",
+      "PowerShell(cd \"C:\\\\Users\\\\inno\\\\Documents\\\\graylog-analyzer\"; $env:PYTHONUTF8=1; python graylog_analyzer.py --range 3600 2>&1)",
+      "PowerShell(Get-Content \"C:\\\\Users\\\\inno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-inno-Documents-graylog-analyzer\\\\d4686937-4d6f-4a75-858d-2f8280cce95e\\\\tasks\\\\blnx8wrf4.output\" -Encoding UTF8 | Select-String -Pattern \"彙整|Graylog 異常|===|分析完成\" -Context 0,200 | Select-Object -First 1 | ForEach-Object { $_.Context.PostContext })",
+      "Bash(python -c \"import anthropic; print\\('anthropic', anthropic.__version__\\)\")",
+      "Bash(pip install *)",
+      "PowerShell(if \\(!\\(Test-Path \"C:\\\\Users\\\\inno\\\\Documents\\\\graylog-analyzer\\\\logs\"\\)\\) { New-Item -ItemType Directory -Path \"C:\\\\Users\\\\inno\\\\Documents\\\\graylog-analyzer\\\\logs\" })",
+      "Read(//mnt/c/Users/inno/Documents/**)",
+      "Bash(PYTHONUTF8=1 python graylog_analyzer.py --hours 24 --output file --output terminal)",
+      "Bash(echo \"PID: $!\")"
+    ]
+  }
+}
