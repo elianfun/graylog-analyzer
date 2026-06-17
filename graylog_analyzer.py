@@ -106,7 +106,7 @@ def run_hourly_analysis(config: dict, output_methods: list[str], hours: int = 24
             print(first_line)
             batch_sections.append(section)
             if idx < total_batches:
-                time.sleep(10)
+                time.sleep(5)
 
         now_str = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
         report = (
@@ -378,7 +378,7 @@ def run_from_cache(config: dict, output_methods: list[str], hours: int = 24,
             print(first_line)
             batch_sections.append(section)
             if idx < total_batches:
-                time.sleep(10)
+                time.sleep(5)
 
         report = (
             f"# Graylog 異常分析報告 — {range_label}\n\n"
