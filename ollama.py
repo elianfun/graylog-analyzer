@@ -1,4 +1,5 @@
 import re
+import time
 import requests
 
 
@@ -20,25 +21,34 @@ def _call_ollama(url: str, model: str, messages: list[dict], timeout: int = 120)
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
         return content
 
-    try:
-        resp = requests.post(f"{url}/api/chat", json=payload, timeout=timeout)
-        resp.raise_for_status()
-        content = _extract(resp.json())
+    max_retries = 3
+    retry_delay = 10  # 秒
 
-        # content 空白：retry，在 user message 末尾強制要求立即輸出
-        if not content:
-            retry_messages = messages[:-1] + [{
-                "role": messages[-1]["role"],
-                "content": messages[-1]["content"] + "\n\n（請立即輸出結果，不要思考過程）",
-            }]
-            payload["messages"] = retry_messages
-            resp2 = requests.post(f"{url}/api/chat", json=payload, timeout=timeout)
-            resp2.raise_for_status()
-            content = _extract(resp2.json())
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(f"{url}/api/chat", json=payload, timeout=timeout)
+            resp.raise_for_status()
+            content = _extract(resp.json())
 
-        return content or "[WARN] 模型未回傳分析結果"
-    except requests.exceptions.RequestException as e:
-        return f"[ERROR] Ollama 失敗: {e}"
+            # content 空白：retry，在 user message 末尾強制要求立即輸出
+            if not content:
+                retry_messages = messages[:-1] + [{
+                    "role": messages[-1]["role"],
+                    "content": messages[-1]["content"] + "\n\n（請立即輸出結果，不要思考過程）",
+                }]
+                payload["messages"] = retry_messages
+                resp2 = requests.post(f"{url}/api/chat", json=payload, timeout=timeout)
+                resp2.raise_for_status()
+                content = _extract(resp2.json())
+
+            return content or "[WARN] 模型未回傳分析結果"
+
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries:
+                print(f"    [WARN] Ollama 連線失敗（第 {attempt}/{max_retries} 次），{retry_delay} 秒後重試... ({e})")
+                time.sleep(retry_delay)
+            else:
+                return f"[ERROR] Ollama 失敗（已重試 {max_retries} 次）: {e}"
 
 
 class OllamaClient:
