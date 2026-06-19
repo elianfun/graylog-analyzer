@@ -24,6 +24,7 @@ def _call_ollama(url: str, model: str, messages: list[dict], timeout: int = 120)
         "messages": messages,
         "stream": False,
         "keep_alive": 0,   # 回應後立即卸載，釋放記憶體
+        "think": False,    # 停用 Qwen3 思考模式，避免生成大量推理 token 拖慢速度
         "options": {"temperature": 0.1, "num_ctx": 16384},
     }
 
@@ -32,8 +33,8 @@ def _call_ollama(url: str, model: str, messages: list[dict], timeout: int = 120)
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
         return content
 
-    max_retries = 3
-    retry_delay = 10  # 秒
+    max_retries = 2
+    retry_delay = 5  # 秒
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -85,7 +86,7 @@ class OllamaClient:
                 ),
             },
         ]
-        return _call_ollama(self.url, self.model, messages, timeout=150)
+        return _call_ollama(self.url, self.model, messages, timeout=120)
 
     def analyze_batch(self, structured_report: str, batch_num: int, total_batches: int) -> str:
         """分析一批設備（分批送 Ollama 使用），回傳該批的分析段落"""
@@ -109,7 +110,7 @@ class OllamaClient:
                 ),
             },
         ]
-        return _call_ollama(self.url, self.model, messages, timeout=180)
+        return _call_ollama(self.url, self.model, messages, timeout=120)
 
     def analyze_final(self, structured_report: str) -> str:
         """
@@ -133,7 +134,7 @@ class OllamaClient:
                 ),
             },
         ]
-        return _call_ollama(self.url, self.model, messages, timeout=180)
+        return _call_ollama(self.url, self.model, messages, timeout=120)
 
     def analyze(self, log_summary: str) -> str:
         """單次分析（向下相容）"""

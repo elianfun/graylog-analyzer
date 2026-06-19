@@ -431,7 +431,7 @@ def run_schedule(config: dict, output_methods: list[str], use_hourly: bool):
 def main():
     parser = argparse.ArgumentParser(description="Graylog 異常日誌自動分析工具")
     parser.add_argument("--output", "-o", action="append",
-                        choices=["terminal", "file", "email", "line"],
+                        choices=["terminal", "file", "pdf", "email", "line"],
                         help="輸出方式（可指定多次）")
     parser.add_argument("--range", "-r", type=int,
                         help="查詢時間範圍（秒）；指定此參數時自動切換為單次模式")

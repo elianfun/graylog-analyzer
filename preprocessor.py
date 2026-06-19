@@ -14,7 +14,14 @@ _VAR_RE = re.compile(
 )
 
 FLAP_WINDOW = timedelta(minutes=5)
-FLAP_THRESHOLD = 5
+FLAP_THRESHOLD = 10   # 同一介面 5 分鐘內 up/down 超過此次數才視為異常
+
+_LINK_EVENT_RE = re.compile(r'SNMP_TRAP_LINK_(DOWN|UP)', re.IGNORECASE)
+_LINK_DOWN_RE = re.compile(r'SNMP_TRAP_LINK_DOWN', re.IGNORECASE)
+
+
+def _is_link_event(message: str) -> bool:
+    return bool(_LINK_EVENT_RE.search(message))
 
 
 def _parse_ts(ts_str: str) -> datetime | None:
@@ -31,33 +38,63 @@ def _normalize(message: str) -> str:
 
 
 def _detect_flapping(logs: list[dict]) -> dict[str, list[dict]]:
-    by_if: dict[str, list[datetime]] = defaultdict(list)
+    """針對 SNMP_TRAP_LINK_DOWN/UP 事件做 flapping 偵測。
+    DOWN + UP 配對才算一次 up/down，同一介面在 FLAP_WINDOW 內
+    min(DOWN次數, UP次數) >= FLAP_THRESHOLD 才視為異常。"""
+    by_if_down: dict[str, list[datetime]] = defaultdict(list)
+    by_if_up:   dict[str, list[datetime]] = defaultdict(list)
+
     for log in logs:
+        msg = log.get("message", "")
+        if not _is_link_event(msg):
+            continue
         ts = _parse_ts(log.get("timestamp", ""))
-        for iface in _IF_RE.findall(log.get("message", "")):
-            if ts:
-                by_if[iface].append(ts)
+        if not ts:
+            continue
+        is_down = bool(_LINK_DOWN_RE.search(msg))
+        for iface in _IF_RE.findall(msg):
+            if is_down:
+                by_if_down[iface].append(ts)
+            else:
+                by_if_up[iface].append(ts)
+
+    all_ifaces = set(by_if_down) | set(by_if_up)
 
     flapping = {}
-    for iface, times in by_if.items():
-        times.sort()
+    for iface in all_ifaces:
+        # 合併並排序，標記 DOWN/UP
+        events: list[tuple[datetime, str]] = (
+            [(ts, "DOWN") for ts in by_if_down.get(iface, [])] +
+            [(ts, "UP")   for ts in by_if_up.get(iface, [])]
+        )
+        events.sort(key=lambda x: x[0])
+
         windows = []
         i = 0
-        while i < len(times):
-            window_end = times[i] + FLAP_WINDOW
+        while i < len(events):
+            window_end = events[i][0] + FLAP_WINDOW
             j = i
-            while j < len(times) and times[j] <= window_end:
+            while j < len(events) and events[j][0] <= window_end:
                 j += 1
-            count = j - i
-            if count >= FLAP_THRESHOLD:
+            window_events = events[i:j]
+
+            # 配對數 = min(DOWN次數, UP次數)
+            down_n = sum(1 for _, s in window_events if s == "DOWN")
+            up_n   = sum(1 for _, s in window_events if s == "UP")
+            pairs  = min(down_n, up_n)
+
+            if pairs >= FLAP_THRESHOLD:
                 windows.append({
-                    "window_start": times[i].strftime("%H:%M"),
-                    "window_end": times[j - 1].strftime("%H:%M"),
-                    "count": count,
+                    "window_start": events[i][0].strftime("%H:%M"),
+                    "window_end":   events[j - 1][0].strftime("%H:%M"),
+                    "count": pairs,
+                    "down": down_n,
+                    "up":   up_n,
                 })
                 i = j
             else:
                 i += 1
+
         if windows:
             flapping[iface] = windows
 
@@ -93,9 +130,30 @@ def extract_stats(messages: list[dict], hour_label: str = "") -> dict:
                 hostname = m.group(1)
                 break
 
-        # 最嚴重的 level
+        # 分離 SNMP link 事件與其他異常
+        link_msgs = [m for m in logs if _is_link_event(m.get("message", ""))]
+        other_msgs = [m for m in logs if not _is_link_event(m.get("message", ""))]
+
+        # Flapping 偵測（只針對 link 事件，門檻 FLAP_THRESHOLD 次/5 分鐘）
+        raw_flapping = _detect_flapping(logs)
+        flapping_ifaces = set(raw_flapping.keys())
+
+        # 只保留真正 flapping 介面的 link 事件；正常開關機（單次 down）直接過濾
+        valid_link_msgs = [
+            m for m in link_msgs
+            if flapping_ifaces.intersection(_IF_RE.findall(m.get("message", "")))
+        ]
+
+        # 有效訊息 = 非 link 事件 + 已確認 flapping 的 link 事件
+        valid_msgs = other_msgs + valid_link_msgs
+
+        # 整台設備若無任何真實異常則略過
+        if not valid_msgs:
+            continue
+
+        # 最嚴重的 level（只看有效訊息）
         max_level = 7
-        for log in logs:
+        for log in valid_msgs:
             lvl = log.get("level", -1)
             if lvl < 0:
                 pri_m = _SYSLOG_PRI_RE.match(log.get("message", ""))
@@ -103,18 +161,15 @@ def extract_stats(messages: list[dict], hour_label: str = "") -> dict:
             if lvl < max_level:
                 max_level = lvl
 
-        # 訊息樣式統計
+        # 訊息樣式統計（只計有效訊息）
         pattern_counts: dict[str, int] = defaultdict(int)
-        for log in logs:
+        for log in valid_msgs:
             raw = log.get("message", "")
             pattern = _normalize(raw)
-            # 保留 interface 名稱，截斷過長
             if len(pattern) > 150:
                 pattern = pattern[:150] + "..."
             pattern_counts[pattern] += 1
 
-        # Flapping 偵測
-        raw_flapping = _detect_flapping(logs)
         flapping_with_hour = {}
         for iface, windows in raw_flapping.items():
             flapping_with_hour[iface] = [
@@ -125,7 +180,7 @@ def extract_stats(messages: list[dict], hour_label: str = "") -> dict:
         stats[device] = {
             "hostname": hostname,
             "hours": [hour_label] if hour_label else [],
-            "total": len(logs),
+            "total": len(valid_msgs),
             "pattern_counts": dict(pattern_counts),
             "flapping": flapping_with_hour,
             "max_level": max_level,
@@ -180,7 +235,8 @@ def format_structured_report_slice(devices_slice: list, total_devices: int) -> s
         if s["flapping"]:
             for iface, windows in s["flapping"].items():
                 for w in windows:
-                    lines.append(f"  ⚠ Flapping {iface}：{w['hour']} {w['window']} 共 {w['count']} 次")
+                    detail = f"DOWN:{w.get('down','?')} UP:{w.get('up','?')}"
+                    lines.append(f"  ⚠ Flapping {iface}：{w['hour']} {w['window']} 共 {w['count']} 次 up/down（{detail}）")
 
         top_patterns = sorted(s["pattern_counts"].items(), key=lambda x: -x[1])[:5]
         for pattern, count in top_patterns:
@@ -212,7 +268,8 @@ def format_structured_report(accumulated: dict, top_n: int = 30) -> str:
         if s["flapping"]:
             for iface, windows in s["flapping"].items():
                 for w in windows:
-                    lines.append(f"  ⚠ Flapping {iface}：{w['hour']} {w['window']} 共 {w['count']} 次")
+                    detail = f"DOWN:{w.get('down','?')} UP:{w.get('up','?')}"
+                    lines.append(f"  ⚠ Flapping {iface}：{w['hour']} {w['window']} 共 {w['count']} 次 up/down（{detail}）")
 
         # 前 5 大訊息樣式
         top_patterns = sorted(s["pattern_counts"].items(), key=lambda x: -x[1])[:5]
@@ -243,19 +300,32 @@ def preprocess(messages: list[dict], max_patterns_per_device: int = 5,
     lines.append("=" * 60)
 
     for device, logs in sorted_devices:
-        lines.append(f"\n【設備】{device}（共 {len(logs)} 筆）")
+        # 過濾：link 事件只保留真正 flapping 的介面
+        link_msgs = [m for m in logs if _is_link_event(m.get("message", ""))]
+        other_msgs = [m for m in logs if not _is_link_event(m.get("message", ""))]
+        raw_flapping = _detect_flapping(logs)
+        flapping_ifaces = set(raw_flapping.keys())
+        valid_link_msgs = [
+            m for m in link_msgs
+            if flapping_ifaces.intersection(_IF_RE.findall(m.get("message", "")))
+        ]
+        valid_logs = other_msgs + valid_link_msgs
+        if not valid_logs:
+            continue
 
-        flapping = _detect_flapping(logs)
-        if flapping:
+        lines.append(f"\n【設備】{device}（共 {len(valid_logs)} 筆）")
+
+        if raw_flapping:
             lines.append("  ⚠ Flapping 偵測：")
-            for iface, windows in flapping.items():
+            for iface, windows in raw_flapping.items():
                 for w in windows:
-                    lines.append(f"    🔴 {iface}：{w['window_start']}～{w['window_end']} 內 {w['count']} 次")
+                    detail = f"DOWN:{w.get('down','?')} UP:{w.get('up','?')}"
+                    lines.append(f"    🔴 {iface}：{w['window_start']}～{w['window_end']} 內 {w['count']} 次 up/down（{detail}）")
 
         pattern_count: dict[str, int] = defaultdict(int)
         level_map_local: dict[str, int] = {}
 
-        for log in logs:
+        for log in valid_logs:
             raw_msg = log.get("message", "")
             pattern = _normalize(raw_msg)
             if len(pattern) > 200:
