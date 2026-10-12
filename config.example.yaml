@@ -1,0 +1,75 @@
+# 設定檔範例：複製為 config.yaml 後填入實際位址（config.yaml 已列入 .gitignore，不會上傳）
+# 機密值（Token / API Key）一律放在 .env，見 .env.example
+
+graylog:
+  url: http://graylog.example.local:9000   # Graylog Web/API 位址
+
+llm:
+  provider: openai         # openai（vLLM / LiteLLM 等 OpenAI 相容 API）或 ollama
+  url: http://vllm.example.local:8000/v1   # 內部 vLLM / OpenAI 相容 API
+  model: qwen3.8-flash-next
+  api_key_env: LLM_API_KEY # 從 .env 讀取的變數名稱；ollama 不需要
+  temperature: 0.1
+  max_tokens: 32768        # 單次回應上限（含思考過程）
+  timeout: 600             # 單次請求逾時（秒）
+  retries: 2               # 失敗或空白回應時重試次數
+  concurrency: 2           # 同時送出的批次數（共用 GPU 伺服器勿設太高）
+  batch_size: 30           # 每批幾台設備
+  max_batch_chars: 60000   # 每批輸入字數上限
+  max_final_chars: 120000  # 最終彙整輸入字數上限
+  batch_thinking: false    # 每批設備分析是否啟用思考（開啟時易耗盡 token 額度導致截斷）
+  final_thinking: true     # 總覽與優先排序是否啟用思考
+  # 改用本地 Ollama 範例：
+  # provider: ollama
+  # url: http://ollama.example.local:11434
+  # model: qwen3.5:4b
+  # concurrency: 1
+  # batch_size: 8
+  # max_batch_chars: 6000
+  # max_final_chars: 8000
+
+# 其他 LLM 設定檔：執行時加 --llm-profile <名稱>，會覆蓋上面 llm: 的同名設定
+llm_profiles:
+  external:                # ⚠ 外部服務，資料會離開內網，務必啟用 mask
+    provider: openai
+    url: https://llm.example.com/v1
+    model: deepseek-v4.1-flash
+    api_key_env: EXTERNAL_API_KEY
+    mask: true             # 去識別化：IP / 主機名稱 / 帳號 / MAC 換成代號後才送出
+    concurrency: 2
+    thinking_control: false  # DeepSeek 不支援 enable_thinking 參數，不送
+
+# 優先分級規則（Python 判定，不交給 LLM）；任一條件成立即歸入該級，P0 優先於 P1
+#   flap      ：單一介面 Flapping 次數合計（5 分鐘內 DOWN/UP 配對 ≥10 次的視窗累加）
+#   if_events ：單一介面相關 log 筆數（僅計 flapping 介面的 LINK_DOWN/UP）
+priority:
+  p0:
+    flap: 100
+    if_events: 300
+    hw_critical_min: 10    # 嚴重硬體關鍵字筆數
+  p1:
+    flap: 20
+    if_events: 50
+    total: 100             # 設備總異常筆數
+    error_total: 50        # 最高等級達 ERROR 以上（level ≤ 3）且總筆數達此值
+    hw_warning_min: 10     # 硬體警告關鍵字筆數（零星 RTC / port get failed 不升級）
+  hw_critical_keywords: ["NOT spinning", "WRITE_DMA", "PSU", "Power Supply", "Temp Too Hot",
+                         "Major alarm set", "storm", "loop detect"]
+  hw_warning_keywords: ["Too Warm", "too Warm", "Minor alarm set", "receive power low",
+                        "RTC ERROR", "get failed", "is down"]
+
+query:
+  range_seconds: 86400   # 預設查過去 24 小時
+  limit: 1000            # 每頁筆數（hourly 模式分頁撈取）
+  max_per_hour: 10000    # 每小時最多撈幾筆（超過會在輸出顯示 WARN）
+  keywords:
+    - "level:0 OR level:1 OR level:2 OR level:3"
+    - "message:error OR message:fail OR message:down OR message:critical"
+
+output:
+  default: terminal      # terminal / file / pdf / email / line
+  report_dir: ./reports
+
+schedule:
+  enabled: false         # 是否啟用定時排程
+  cron: "0 8 * * *"     # 每天早上 8 點

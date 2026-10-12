@@ -3,3 +3,4 @@ pyyaml
 python-dotenv
 schedule
 reportlab
+truststore
